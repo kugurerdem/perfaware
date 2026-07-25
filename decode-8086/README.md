@@ -8,9 +8,11 @@ Page 164 of the [8086 Reference Manual](https://edge.edx.org/c4x/BITSPilani/EEE2
 
 I've put the files provided by Casey under `testdata` folder.
 
-To test our decoder implementation against them, we can simply:
+Run all assembly-output comparisons with:
 
 ```bash
-./decode_8086 listing_0037_single_register_mov listing_0037_single_register_mov.decoded.asm
+odin test .
 ```
 
+The native Odin tests decode the provided binaries and compare the resulting
+instruction streams with their expected assembly.

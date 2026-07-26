@@ -6,13 +6,11 @@ There are three milestones to this project.
 - [ ] Extend the program so that it decodes all MOV forms. Handle variable-length instructions, memory operands, and displacements.
   - [X] Register to register (with 8-bit and 16-bit displacemets)
   - [X] Immediate-to-register (both for 8-bit and 16-bit)
-  - [ ] Source address calculation
-  - [ ] Source address calculation plus 8-bit displacement
-  - [ ] Source address calculation plus 16-bit displacement
-  - [ ] Dest address calculation
-  - [ ] Signed displacements
+  - [X] Effective address calculation (with 8-bit and 16-bit displacements)
+  - [X] Dest address calculation
+  - [X] Signed displacements
+  - [X] Direct address
   - [ ] Explicit sizes
-  - [ ] Direct address
   - [ ] Memory to accumulator
   - [ ] Accumulator to memory
 - [ ] Extend the decoder to support arithmetic instructions like `ADD`, `SUB`, and `CMP`.

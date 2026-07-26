@@ -8,12 +8,20 @@ import "core:testing"
 
 @(test)
 immediate_to_register_mov :: proc(t: ^testing.T) {
-	input := [13]u8{
-		0xb1, 0x0c,       // mov cl, 12
-		0xb5, 0xf4,       // mov ch, -12
-		0xb9, 0x0c, 0x00, // mov cx, 12
-		0xb9, 0xf4, 0xff, // mov cx, -12
-		0xba, 0x6c, 0x0f, // mov dx, 3948
+	input := [13]u8 {
+		0xb1,
+		0x0c, // mov cl, 12
+		0xb5,
+		0xf4, // mov ch, -12
+		0xb9,
+		0x0c,
+		0x00, // mov cx, 12
+		0xb9,
+		0xf4,
+		0xff, // mov cx, -12
+		0xba,
+		0x6c,
+		0x0f, // mov dx, 3948
 	}
 	output := strings.builder_make()
 	defer strings.builder_destroy(&output)
@@ -25,6 +33,46 @@ immediate_to_register_mov :: proc(t: ^testing.T) {
 		t,
 		strings.to_string(output),
 		"mov cl, 12\nmov ch, -12\nmov cx, 12\nmov cx, -12\nmov dx, 3948\n",
+	)
+}
+
+@(test)
+register_memory_to_from_register_mov :: proc(t: ^testing.T) {
+	input := [18]u8 {
+		0x8a,
+		0x00, // mov al, [bx + si]
+		0x8b,
+		0x5b,
+		0x04, // mov bx, [bp + di + 4]
+		0x89,
+		0x4a,
+		0xd3, // mov [bp + si - 45], cx
+		0x88,
+		0xa7,
+		0x87,
+		0x13, // mov [bx + 4999], ah
+		0x8b,
+		0x2e,
+		0x05,
+		0x00, // mov bp, [5]
+		0x8b,
+		0xde, // mov bx, si
+	}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := decode(input[:], &output)
+
+	testing.expect(t, result.error == .None)
+	testing.expect_value(
+		t,
+		strings.to_string(output),
+		"mov al, [bx + si]\n" +
+		"mov bx, [bp + di + 4]\n" +
+		"mov [bp + si - 45], cx\n" +
+		"mov [bx + 4999], ah\n" +
+		"mov bp, [5]\n" +
+		"mov bx, si\n",
 	)
 }
 

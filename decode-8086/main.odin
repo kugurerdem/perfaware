@@ -7,7 +7,8 @@ import "core:strings"
 // Opcode is the first 6 bits of the instruction
 // it can be obtained by applying >> 2 to the first half of the instruction
 Opcode :: enum u8 {
-	MOV = 0b100010,
+	REG_TO_REG_MOV       = 0b100010,
+	IMMEDIATE_TO_REG_MOV = 0b1011,
 }
 
 // We use registers_8 when w == 0, and registers_16 when w == 1
@@ -29,54 +30,62 @@ Decode_Result :: struct {
 }
 
 decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
-	for i := 0; i + 1 < len(data); i += 2 {
+	for i := 0; i + 1 < len(data); {
 		b0 := data[i] // opcode (6 bits) d w
-		b1 := data[i + 1] // mod reg r/m
+		i += 1
 
-		opcode := b0 >> 2
-		// d determines the operand direction
-		// it 0, we copy from reg_operand to rm_operand
-		// if 1, we copy from rm_operand to reg_operand
-		d := (b0 >> 1) & 1
+		b1 := data[i] // mod reg r/m
+		i += 1
 
-		// w determines which register table to use
-		// if 0, we use lower or higher half of the registers
-		// if 1, we use the whole registers
-		w := b0 & 1
+		switch {
+		case b0 >> 2 == u8(Opcode.REG_TO_REG_MOV):
+			// d determines the operand direction
+			// it 0, we copy from reg_operand to rm_operand
+			// if 1, we copy from rm_operand to reg_operand
+			d := (b0 >> 1) & 1
 
-		if opcode != u8(Opcode.MOV) {
-			return {error = .Unsupported_Opcode, offset = i}
+			// w determines which register table to use
+			// if 0, we use lower or higher half of the registers
+			// if 1, we use the whole registers
+			w := b0 & 1
+
+			mod := b1 >> 6
+			reg := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+
+			// This version only supports register-to-register MOV.
+			if mod != 0b11 {
+				return {error = .Unsupported_Addressing_Mode, offset = i, addressing_mode = mod}
+			}
+
+			// determine the reg and rm operands based on w field, and their values
+			reg_operand: string
+			rm_operand: string
+
+			// TODO: If we just had one array instead of two different registers arrays,
+			// I think we could have done something smarter here
+			if w == 0 {
+				reg_operand = registers_8[reg]
+				rm_operand = registers_8[rm]
+			} else {
+				reg_operand = registers_16[reg]
+				rm_operand = registers_16[rm]
+			}
+
+			// Determine the destination and source order based on d bit
+			if d == 0 {
+				fmt.sbprintfln(output, "mov %s, %s", rm_operand, reg_operand)
+			} else {
+				fmt.sbprintfln(output, "mov %s, %s", reg_operand, rm_operand)
+			}
+
+			continue
+		case b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV):
+			// TODO: Implement
+			continue
 		}
 
-		mod := b1 >> 6
-		reg := (b1 >> 3) & 0b111
-		rm := b1 & 0b111
-
-		// This version only supports register-to-register MOV.
-		if mod != 0b11 {
-			return {error = .Unsupported_Addressing_Mode, offset = i, addressing_mode = mod}
-		}
-
-		// determine the reg and rm operands based on w field, and their values
-		reg_operand: string
-		rm_operand: string
-
-		// TODO: If we just had one array instead of two different registers arrays,
-		// I think we could have done something smarter here
-		if w == 0 {
-			reg_operand = registers_8[reg]
-			rm_operand = registers_8[rm]
-		} else {
-			reg_operand = registers_16[reg]
-			rm_operand = registers_16[rm]
-		}
-
-		// Determine the destination and source order based on d bit
-		if d == 0 {
-			fmt.sbprintfln(output, "mov %s, %s", rm_operand, reg_operand)
-		} else {
-			fmt.sbprintfln(output, "mov %s, %s", reg_operand, rm_operand)
-		}
+		return {error = .Unsupported_Opcode, offset = i}
 	}
 
 	return {}

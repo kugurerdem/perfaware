@@ -9,6 +9,7 @@ import "core:strings"
 Opcode :: enum u8 {
 	REGISTER_MEMORY_TO_FROM_REGISTER_MOV = 0b100010,
 	IMMEDIATE_TO_REG_MOV                 = 0b1011,
+	IMMEDIATE_TO_REGISTER_MEMORY_MOV     = 0b1100011,
 }
 
 // We use registers_8 when w == 0, and registers_16 when w == 1
@@ -144,6 +145,78 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 				fmt.sbprintfln(output, "mov %s, %d", registers_16[reg], i16(immediate))
 			}
 			continue
+		case b0 >> 1 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_MOV):
+			w := b0 & 1
+			mod := b1 >> 6
+			opcode_extension := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+
+			// C6/C7 use the ModR/M reg field as an opcode extension, which
+			// must be zero for MOV.
+			if opcode_extension != 0 {
+				return {error = .Unsupported_Opcode, offset = i - 2}
+			}
+
+			rm_builder := strings.builder_make()
+
+			switch mod {
+			case 0b00:
+				if rm == 0b110 {
+					address := u16(data[i]) | u16(data[i + 1]) << 8
+					i += 2
+					fmt.sbprintf(&rm_builder, "[%d]", address)
+				} else {
+					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
+				}
+			case 0b01:
+				displacement := int(i8(data[i]))
+				i += 1
+				if displacement < 0 {
+					fmt.sbprintf(&rm_builder, "[%s - %d]", effective_addresses[rm], -displacement)
+				} else if displacement > 0 {
+					fmt.sbprintf(&rm_builder, "[%s + %d]", effective_addresses[rm], displacement)
+				} else {
+					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
+				}
+			case 0b10:
+				raw_displacement := u16(data[i]) | u16(data[i + 1]) << 8
+				i += 2
+				displacement := int(i16(raw_displacement))
+				if displacement < 0 {
+					fmt.sbprintf(&rm_builder, "[%s - %d]", effective_addresses[rm], -displacement)
+				} else if displacement > 0 {
+					fmt.sbprintf(&rm_builder, "[%s + %d]", effective_addresses[rm], displacement)
+				} else {
+					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
+				}
+			case 0b11:
+				if w == 0 {
+					strings.write_string(&rm_builder, registers_8[rm])
+				} else {
+					strings.write_string(&rm_builder, registers_16[rm])
+				}
+			}
+
+			rm_operand := strings.to_string(rm_builder)
+			if w == 0 {
+				immediate := i8(data[i])
+				i += 1
+				if mod == 0b11 {
+					fmt.sbprintfln(output, "mov %s, %d", rm_operand, immediate)
+				} else {
+					fmt.sbprintfln(output, "mov %s, byte %d", rm_operand, immediate)
+				}
+			} else {
+				immediate := u16(data[i]) | u16(data[i + 1]) << 8
+				i += 2
+				if mod == 0b11 {
+					fmt.sbprintfln(output, "mov %s, %d", rm_operand, i16(immediate))
+				} else {
+					fmt.sbprintfln(output, "mov %s, word %d", rm_operand, i16(immediate))
+				}
+			}
+			strings.builder_destroy(&rm_builder)
+			continue
 		}
 
 		return {error = .Unsupported_Opcode, offset = i}
@@ -193,4 +266,3 @@ main :: proc() {
 		fmt.println("Failed to write file:", err)
 	}
 }
-

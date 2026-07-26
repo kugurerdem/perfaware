@@ -3,14 +3,14 @@
 There are three milestones to this project.
 
 - [X] Write a program that reads an 8086 binary and disassembles only the register-to-register MOV instruction into Intel assembly syntax.
-- [ ] Extend the program so that it decodes all MOV forms. Handle variable-length instructions, memory operands, and displacements.
+- [X] Extend the program so that it decodes all MOV forms. Handle variable-length instructions, memory operands, and displacements.
   - [X] Register to register (with 8-bit and 16-bit displacemets)
   - [X] Immediate-to-register (both for 8-bit and 16-bit)
   - [X] Effective address calculation (with 8-bit and 16-bit displacements)
   - [X] Dest address calculation
   - [X] Signed displacements
   - [X] Direct address
-  - [ ] Explicit sizes
+  - [X] Explicit sizes
   - [ ] Memory to accumulator
   - [ ] Accumulator to memory
 - [ ] Extend the decoder to support arithmetic instructions like `ADD`, `SUB`, and `CMP`.

@@ -76,6 +76,46 @@ register_memory_to_from_register_mov :: proc(t: ^testing.T) {
 	)
 }
 
+@(test)
+immediate_to_register_memory_mov :: proc(t: ^testing.T) {
+	input := [19]u8 {
+		0xc6,
+		0x03,
+		0x07, // mov [bp + di], byte 7
+		0xc7,
+		0x85,
+		0x85,
+		0x03,
+		0x5b,
+		0x01, // mov [di + 901], word 347
+		0xc6,
+		0xc0,
+		0xf4, // mov al, -12 (register encoded through r/m)
+		0xc7,
+		0xc3,
+		0x6c,
+		0x0f, // mov bx, 3948 (register encoded through r/m)
+		0xc6,
+		0x00,
+		0xff, // mov [bx + si], byte -1
+	}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := decode(input[:], &output)
+
+	testing.expect(t, result.error == .None)
+	testing.expect_value(
+		t,
+		strings.to_string(output),
+		"mov [bp + di], byte 7\n" +
+		"mov [di + 901], word 347\n" +
+		"mov al, -12\n" +
+		"mov bx, 3948\n" +
+		"mov [bx + si], byte -1\n",
+	)
+}
+
 expect_assembly_round_trip :: proc(t: ^testing.T, input: string) {
 	temp_dir, err := os.make_directory_temp("", "decode-8086-*", context.allocator)
 	if !testing.expectf(t, err == nil, "could not create temporary directory: %v", err) {
@@ -130,6 +170,16 @@ expect_assembly_round_trip :: proc(t: ^testing.T, input: string) {
 	}
 
 	testing.expect(t, bytes.equal(assembled, transmute([]u8)input), "round-trip bytes differ")
+}
+
+@(test)
+immediate_to_memory_mov_round_trip :: proc(t: ^testing.T) {
+	expect_assembly_round_trip(
+		t,
+		"\xc6\x03\x07" +
+		"\xc7\x85\x85\x03\x5b\x01" +
+		"\xc6\x00\xff",
+	)
 }
 
 @(test)

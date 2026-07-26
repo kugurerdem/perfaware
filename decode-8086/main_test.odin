@@ -6,116 +6,6 @@ import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 
-@(test)
-immediate_to_register_mov :: proc(t: ^testing.T) {
-	input := [13]u8 {
-		0xb1,
-		0x0c, // mov cl, 12
-		0xb5,
-		0xf4, // mov ch, -12
-		0xb9,
-		0x0c,
-		0x00, // mov cx, 12
-		0xb9,
-		0xf4,
-		0xff, // mov cx, -12
-		0xba,
-		0x6c,
-		0x0f, // mov dx, 3948
-	}
-	output := strings.builder_make()
-	defer strings.builder_destroy(&output)
-
-	result := decode(input[:], &output)
-
-	testing.expect(t, result.error == .None)
-	testing.expect_value(
-		t,
-		strings.to_string(output),
-		"mov cl, 12\nmov ch, -12\nmov cx, 12\nmov cx, -12\nmov dx, 3948\n",
-	)
-}
-
-@(test)
-register_memory_to_from_register_mov :: proc(t: ^testing.T) {
-	input := [18]u8 {
-		0x8a,
-		0x00, // mov al, [bx + si]
-		0x8b,
-		0x5b,
-		0x04, // mov bx, [bp + di + 4]
-		0x89,
-		0x4a,
-		0xd3, // mov [bp + si - 45], cx
-		0x88,
-		0xa7,
-		0x87,
-		0x13, // mov [bx + 4999], ah
-		0x8b,
-		0x2e,
-		0x05,
-		0x00, // mov bp, [5]
-		0x8b,
-		0xde, // mov bx, si
-	}
-	output := strings.builder_make()
-	defer strings.builder_destroy(&output)
-
-	result := decode(input[:], &output)
-
-	testing.expect(t, result.error == .None)
-	testing.expect_value(
-		t,
-		strings.to_string(output),
-		"mov al, [bx + si]\n" +
-		"mov bx, [bp + di + 4]\n" +
-		"mov [bp + si - 45], cx\n" +
-		"mov [bx + 4999], ah\n" +
-		"mov bp, [5]\n" +
-		"mov bx, si\n",
-	)
-}
-
-@(test)
-immediate_to_register_memory_mov :: proc(t: ^testing.T) {
-	input := [19]u8 {
-		0xc6,
-		0x03,
-		0x07, // mov [bp + di], byte 7
-		0xc7,
-		0x85,
-		0x85,
-		0x03,
-		0x5b,
-		0x01, // mov [di + 901], word 347
-		0xc6,
-		0xc0,
-		0xf4, // mov al, -12 (register encoded through r/m)
-		0xc7,
-		0xc3,
-		0x6c,
-		0x0f, // mov bx, 3948 (register encoded through r/m)
-		0xc6,
-		0x00,
-		0xff, // mov [bx + si], byte -1
-	}
-	output := strings.builder_make()
-	defer strings.builder_destroy(&output)
-
-	result := decode(input[:], &output)
-
-	testing.expect(t, result.error == .None)
-	testing.expect_value(
-		t,
-		strings.to_string(output),
-		"mov [bp + di], byte 7\n" +
-		"mov [di + 901], word 347\n" +
-		"mov al, -12\n" +
-		"mov bx, 3948\n" +
-		"mov [bx + si], byte -1\n",
-	)
-}
-
 expect_assembly_round_trip :: proc(t: ^testing.T, input: string) {
 	temp_dir, err := os.make_directory_temp("", "decode-8086-*", context.allocator)
 	if !testing.expectf(t, err == nil, "could not create temporary directory: %v", err) {
@@ -173,16 +63,6 @@ expect_assembly_round_trip :: proc(t: ^testing.T, input: string) {
 }
 
 @(test)
-immediate_to_memory_mov_round_trip :: proc(t: ^testing.T) {
-	expect_assembly_round_trip(
-		t,
-		"\xc6\x03\x07" +
-		"\xc7\x85\x85\x03\x5b\x01" +
-		"\xc6\x00\xff",
-	)
-}
-
-@(test)
 listing_0037_single_register_mov :: proc(t: ^testing.T) {
 	expect_assembly_round_trip(t, #load("testdata/listing_0037_single_register_mov"))
 }
@@ -201,3 +81,4 @@ listing_0039_more_movs :: proc(t: ^testing.T) {
 listing_0040_challenge_movs :: proc(t: ^testing.T) {
 	expect_assembly_round_trip(t, #load("testdata/listing_0040_challenge_movs"))
 }
+

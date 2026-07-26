@@ -10,6 +10,7 @@ Opcode :: enum u8 {
 	REGISTER_MEMORY_TO_FROM_REGISTER_MOV = 0b100010,
 	IMMEDIATE_TO_REG_MOV                 = 0b1011,
 	IMMEDIATE_TO_REGISTER_MEMORY_MOV     = 0b1100011,
+	ACCUMULATOR_MEMORY_MOV               = 0b101000,
 }
 
 // We use registers_8 when w == 0, and registers_16 when w == 1
@@ -52,6 +53,26 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 		i += 1
 
 		switch {
+		case b0 >> 2 == u8(Opcode.ACCUMULATOR_MEMORY_MOV):
+			// A0-A3 encode a move between AL/AX and a direct 16-bit
+			// memory address. The instruction has no ModR/M byte, so b1
+			// is the low byte of the address that was read above.
+			d := (b0 >> 1) & 1
+			w := b0 & 1
+			address := u16(b1) | u16(data[i]) << 8
+			i += 1
+
+			accumulator := registers_8[0]
+			if w == 1 {
+				accumulator = registers_16[0]
+			}
+
+			if d == 0 {
+				fmt.sbprintfln(output, "mov %s, [%d]", accumulator, address)
+			} else {
+				fmt.sbprintfln(output, "mov [%d], %s", address, accumulator)
+			}
+			continue
 		case b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV):
 			// d determines the operand direction
 			// it 0, we copy from reg_operand to rm_operand

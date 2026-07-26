@@ -24,11 +24,17 @@ Page 164 of the [8086 Reference Manual](https://edge.edx.org/c4x/BITSPilani/EEE2
 
 I've put the files provided by Casey under `testdata` folder.
 
-Run all assembly-output comparisons with:
+Install NASM, then run all decode/reassemble round-trip tests with:
 
 ```bash
 odin test .
 ```
 
-The native Odin tests decode the provided binaries and compare the resulting
-instruction streams with their expected assembly.
+The tests decode each provided binary, reassemble the decoded instructions with
+NASM, and compare the resulting bytes with the original binary.
+
+To test only specific listings:
+
+```bash
+odin test . -- -tests:listing_0037_single_register_mov,listing_0038_many_register_mov
+```

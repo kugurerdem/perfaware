@@ -82,3 +82,7 @@ listing_0040_challenge_movs :: proc(t: ^testing.T) {
 	expect_assembly_round_trip(t, #load("testdata/listing_0040_challenge_movs"))
 }
 
+@(test)
+listing_0041_add_sub_cmp_jnz :: proc(t: ^testing.T) {
+	expect_assembly_round_trip(t, #load("testdata/listing_0041_add_sub_cmp_jnz"))
+}

@@ -32,6 +32,78 @@ effective_addresses := [8]string {
 	"bx", // r/m=111: address stored in the base register
 }
 
+write_rm_operand :: proc(data: []u8, i: ^int, mod, rm, w: u8, output: ^strings.Builder) {
+	switch mod {
+	case 0b00:
+		if rm == 0b110 {
+			address := u16(data[i^]) | u16(data[i^ + 1]) << 8
+			i^ += 2
+			fmt.sbprintf(output, "[%d]", address)
+		} else {
+			fmt.sbprintf(output, "[%s]", effective_addresses[rm])
+		}
+	case 0b01:
+		displacement := int(i8(data[i^]))
+		i^ += 1
+		if displacement < 0 {
+			fmt.sbprintf(output, "[%s - %d]", effective_addresses[rm], -displacement)
+		} else if displacement > 0 {
+			fmt.sbprintf(output, "[%s + %d]", effective_addresses[rm], displacement)
+		} else {
+			fmt.sbprintf(output, "[%s]", effective_addresses[rm])
+		}
+	case 0b10:
+		raw_displacement := u16(data[i^]) | u16(data[i^ + 1]) << 8
+		i^ += 2
+		displacement := int(i16(raw_displacement))
+		if displacement < 0 {
+			fmt.sbprintf(output, "[%s - %d]", effective_addresses[rm], -displacement)
+		} else if displacement > 0 {
+			fmt.sbprintf(output, "[%s + %d]", effective_addresses[rm], displacement)
+		} else {
+			fmt.sbprintf(output, "[%s]", effective_addresses[rm])
+		}
+	case 0b11:
+		if w == 0 {
+			strings.write_string(output, registers_8[rm])
+		} else {
+			strings.write_string(output, registers_16[rm])
+		}
+	}
+}
+
+jump_mnemonics := [16]string {
+	"jo",
+	"jno",
+	"jb",
+	"jnb",
+	"je",
+	"jne",
+	"jbe",
+	"ja",
+	"js",
+	"jns",
+	"jp",
+	"jnp",
+	"jl",
+	"jnl",
+	"jle",
+	"jg",
+}
+
+loop_mnemonics := [4]string{"loopnz", "loopz", "loop", "jcxz"}
+
+write_relative_jump :: proc(output: ^strings.Builder, mnemonic: string, displacement: i8) {
+	target_offset := int(displacement) + 2
+	if target_offset < 0 {
+		fmt.sbprintfln(output, "%s $-%d", mnemonic, -target_offset)
+	} else if target_offset > 0 {
+		fmt.sbprintfln(output, "%s $+%d", mnemonic, target_offset)
+	} else {
+		fmt.sbprintfln(output, "%s $", mnemonic)
+	}
+}
+
 Decode_Error :: enum {
 	None,
 	Unsupported_Opcode,
@@ -53,6 +125,141 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 		i += 1
 
 		switch {
+		case b0 >> 2 == 0b000000 || b0 >> 2 == 0b001010 || b0 >> 2 == 0b001110:
+			mnemonic := "add"
+			switch b0 >> 2 {
+			case 0b001010:
+				mnemonic = "sub"
+			case 0b001110:
+				mnemonic = "cmp"
+			}
+
+			d := (b0 >> 1) & 1
+			w := b0 & 1
+			mod := b1 >> 6
+			reg := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+
+			reg_operand := registers_8[reg]
+			if w == 1 {
+				reg_operand = registers_16[reg]
+			}
+
+			rm_builder := strings.builder_make()
+			write_rm_operand(data, &i, mod, rm, w, &rm_builder)
+			rm_operand := strings.to_string(rm_builder)
+
+			if d == 0 {
+				fmt.sbprintfln(output, "%s %s, %s", mnemonic, rm_operand, reg_operand)
+			} else {
+				fmt.sbprintfln(output, "%s %s, %s", mnemonic, reg_operand, rm_operand)
+			}
+			strings.builder_destroy(&rm_builder)
+			continue
+		case b0 >> 1 == 0b00000010 || b0 >> 1 == 0b00010110 || b0 >> 1 == 0b00011110:
+			mnemonic := "add"
+			switch b0 >> 1 {
+			case 0b00010110:
+				mnemonic = "sub"
+			case 0b00011110:
+				mnemonic = "cmp"
+			}
+
+			w := b0 & 1
+			if w == 0 {
+				fmt.sbprintfln(output, "%s al, %d", mnemonic, i8(b1))
+			} else {
+				immediate := u16(b1) | u16(data[i]) << 8
+				i += 1
+				fmt.sbprintfln(output, "%s ax, %d", mnemonic, i16(immediate))
+			}
+			continue
+		case b0 == 0x80 || b0 == 0x81 || b0 == 0x83:
+			mod := b1 >> 6
+			opcode_extension := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+
+			mnemonic := ""
+			switch opcode_extension {
+			case 0:
+				mnemonic = "add"
+			case 5:
+				mnemonic = "sub"
+			case 7:
+				mnemonic = "cmp"
+			case:
+				return {error = .Unsupported_Opcode, offset = i - 2}
+			}
+
+			w: u8 = 0
+			if b0 != 0x80 {
+				w = 1
+			}
+
+			rm_builder := strings.builder_make()
+			write_rm_operand(data, &i, mod, rm, w, &rm_builder)
+			rm_operand := strings.to_string(rm_builder)
+
+			switch b0 {
+			case 0x80:
+				immediate := i8(data[i])
+				i += 1
+				if mod == 0b11 {
+					fmt.sbprintfln(output, "%s %s, %d", mnemonic, rm_operand, immediate)
+				} else {
+					fmt.sbprintfln(output, "%s byte %s, %d", mnemonic, rm_operand, immediate)
+				}
+			case 0x81:
+				raw_immediate := u16(data[i]) | u16(data[i + 1]) << 8
+				i += 2
+				immediate := i16(raw_immediate)
+				if mod == 0b11 {
+					fmt.sbprintfln(
+						output,
+						"%s %s, strict word %d",
+						mnemonic,
+						rm_operand,
+						immediate,
+					)
+				} else {
+					fmt.sbprintfln(
+						output,
+						"%s word %s, strict word %d",
+						mnemonic,
+						rm_operand,
+						immediate,
+					)
+				}
+			case 0x83:
+				immediate := i8(data[i])
+				i += 1
+				if mod == 0b11 {
+					fmt.sbprintfln(
+						output,
+						"%s %s, strict byte %d",
+						mnemonic,
+						rm_operand,
+						immediate,
+					)
+				} else {
+					fmt.sbprintfln(
+						output,
+						"%s word %s, strict byte %d",
+						mnemonic,
+						rm_operand,
+						immediate,
+					)
+				}
+			}
+
+			strings.builder_destroy(&rm_builder)
+			continue
+		case b0 >> 4 == 0b0111:
+			write_relative_jump(output, jump_mnemonics[b0 & 0b1111], i8(b1))
+			continue
+		case b0 & 0b11111100 == 0b11100000:
+			write_relative_jump(output, loop_mnemonics[b0 & 0b11], i8(b1))
+			continue
 		case b0 >> 2 == u8(Opcode.ACCUMULATOR_MEMORY_MOV):
 			// A0-A3 encode a move between AL/AX and a direct 16-bit
 			// memory address. The instruction has no ModR/M byte, so b1
@@ -94,55 +301,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 			}
 
 			rm_builder := strings.builder_make()
-
-			// All cases except 0b11, means that rm is used for the memory address
-			switch mod {
-			// mod = 0b00 is a special case, if rm == 0b110, then we put address,
-			// otherwise effective_addresses
-			case 0b00:
-				if rm == 0b110 {
-					// mod=00, r/m=110 is a direct 16-bit address rather
-					// than the otherwise expected [bp].
-					address := u16(data[i]) | u16(data[i + 1]) << 8
-					i += 2
-					fmt.sbprintf(&rm_builder, "[%d]", address)
-				} else {
-					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
-				}
-
-			// mod == 0b01 is for 8 bit displacement
-			case 0b01:
-				displacement := int(i8(data[i]))
-				i += 1
-				if displacement < 0 {
-					fmt.sbprintf(&rm_builder, "[%s - %d]", effective_addresses[rm], -displacement)
-				} else if displacement > 0 {
-					fmt.sbprintf(&rm_builder, "[%s + %d]", effective_addresses[rm], displacement)
-				} else {
-					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
-				}
-
-			// mod == 0b10 is for 16 bit displacement
-			case 0b10:
-				raw_displacement := u16(data[i]) | u16(data[i + 1]) << 8
-				i += 2
-				displacement := int(i16(raw_displacement))
-				if displacement < 0 {
-					fmt.sbprintf(&rm_builder, "[%s - %d]", effective_addresses[rm], -displacement)
-				} else if displacement > 0 {
-					fmt.sbprintf(&rm_builder, "[%s + %d]", effective_addresses[rm], displacement)
-				} else {
-					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
-				}
-
-			// mod == 0b11 is for from registor to register
-			case 0b11:
-				if w == 0 {
-					strings.write_string(&rm_builder, registers_8[rm])
-				} else {
-					strings.write_string(&rm_builder, registers_16[rm])
-				}
-			}
+			write_rm_operand(data, &i, mod, rm, w, &rm_builder)
 
 			rm_operand := strings.to_string(rm_builder)
 			if d == 0 {
@@ -179,44 +338,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 			}
 
 			rm_builder := strings.builder_make()
-
-			switch mod {
-			case 0b00:
-				if rm == 0b110 {
-					address := u16(data[i]) | u16(data[i + 1]) << 8
-					i += 2
-					fmt.sbprintf(&rm_builder, "[%d]", address)
-				} else {
-					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
-				}
-			case 0b01:
-				displacement := int(i8(data[i]))
-				i += 1
-				if displacement < 0 {
-					fmt.sbprintf(&rm_builder, "[%s - %d]", effective_addresses[rm], -displacement)
-				} else if displacement > 0 {
-					fmt.sbprintf(&rm_builder, "[%s + %d]", effective_addresses[rm], displacement)
-				} else {
-					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
-				}
-			case 0b10:
-				raw_displacement := u16(data[i]) | u16(data[i + 1]) << 8
-				i += 2
-				displacement := int(i16(raw_displacement))
-				if displacement < 0 {
-					fmt.sbprintf(&rm_builder, "[%s - %d]", effective_addresses[rm], -displacement)
-				} else if displacement > 0 {
-					fmt.sbprintf(&rm_builder, "[%s + %d]", effective_addresses[rm], displacement)
-				} else {
-					fmt.sbprintf(&rm_builder, "[%s]", effective_addresses[rm])
-				}
-			case 0b11:
-				if w == 0 {
-					strings.write_string(&rm_builder, registers_8[rm])
-				} else {
-					strings.write_string(&rm_builder, registers_16[rm])
-				}
-			}
+			write_rm_operand(data, &i, mod, rm, w, &rm_builder)
 
 			rm_operand := strings.to_string(rm_builder)
 			if w == 0 {
@@ -270,7 +392,7 @@ main :: proc() {
 	result := decode(data, &output)
 	switch result.error {
 	case .Unsupported_Opcode:
-		fmt.println("Unsupported operand! Only supported operand is MOV")
+		fmt.printf("Unsupported opcode at byte %d\n", result.offset)
 		return
 	case .Unsupported_Addressing_Mode:
 		fmt.printf(
@@ -287,3 +409,4 @@ main :: proc() {
 		fmt.println("Failed to write file:", err)
 	}
 }
+

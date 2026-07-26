@@ -6,6 +6,28 @@ import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 
+@(test)
+immediate_to_register_mov :: proc(t: ^testing.T) {
+	input := [13]u8{
+		0xb1, 0x0c,       // mov cl, 12
+		0xb5, 0xf4,       // mov ch, -12
+		0xb9, 0x0c, 0x00, // mov cx, 12
+		0xb9, 0xf4, 0xff, // mov cx, -12
+		0xba, 0x6c, 0x0f, // mov dx, 3948
+	}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := decode(input[:], &output)
+
+	testing.expect(t, result.error == .None)
+	testing.expect_value(
+		t,
+		strings.to_string(output),
+		"mov cl, 12\nmov ch, -12\nmov cx, 12\nmov cx, -12\nmov dx, 3948\n",
+	)
+}
+
 expect_assembly_round_trip :: proc(t: ^testing.T, input: string) {
 	temp_dir, err := os.make_directory_temp("", "decode-8086-*", context.allocator)
 	if !testing.expectf(t, err == nil, "could not create temporary directory: %v", err) {

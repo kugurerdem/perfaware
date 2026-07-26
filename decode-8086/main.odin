@@ -54,6 +54,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 			rm := b1 & 0b111
 
 			// This version only supports register-to-register MOV.
+			// TODO: We should also handle the mod
 			if mod != 0b11 {
 				return {error = .Unsupported_Addressing_Mode, offset = i, addressing_mode = mod}
 			}
@@ -81,7 +82,17 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 
 			continue
 		case b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV):
-			// TODO: Implement
+			w := (b0 >> 3) & 1
+			reg := b0 & 0b111
+
+			if w == 0 {
+				immediate := i8(b1)
+				fmt.sbprintfln(output, "mov %s, %d", registers_8[reg], immediate)
+			} else {
+				immediate := u16(b1) | u16(data[i]) << 8
+				i += 1
+				fmt.sbprintfln(output, "mov %s, %d", registers_16[reg], i16(immediate))
+			}
 			continue
 		}
 

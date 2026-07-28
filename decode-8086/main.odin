@@ -144,6 +144,106 @@ Simulation_Result :: struct {
 	offset: int,
 }
 
+Simulation_Flags :: struct {
+	parity: bool,
+	zero:   bool,
+	sign:   bool,
+}
+
+Arithmetic_Operation :: enum {
+	ADD,
+	SUB,
+	CMP,
+}
+
+simulation_flags_from_result :: proc(result: u16) -> Simulation_Flags {
+	low_byte := u8(result & 0xff)
+	set_bit_count := 0
+	for bit: u8 = 0; bit < 8; bit += 1 {
+		set_bit_count += int((low_byte >> bit) & 1)
+	}
+
+	return {parity = set_bit_count % 2 == 0, zero = result == 0, sign = result & 0x8000 != 0}
+}
+
+simulation_flags_equal :: proc(left, right: Simulation_Flags) -> bool {
+	return left.parity == right.parity && left.zero == right.zero && left.sign == right.sign
+}
+
+write_simulation_flags :: proc(output: ^strings.Builder, flags: Simulation_Flags) {
+	if flags.parity {
+		strings.write_rune(output, 'P')
+	}
+	if flags.zero {
+		strings.write_rune(output, 'Z')
+	}
+	if flags.sign {
+		strings.write_rune(output, 'S')
+	}
+}
+
+write_simulation_flag_change :: proc(
+	output: ^strings.Builder,
+	previous, current: Simulation_Flags,
+) {
+	if simulation_flags_equal(previous, current) {
+		return
+	}
+
+	strings.write_string(output, " flags:")
+	write_simulation_flags(output, previous)
+	strings.write_string(output, "->")
+	write_simulation_flags(output, current)
+}
+
+arithmetic_operation_from_extension :: proc(extension: u8) -> (Arithmetic_Operation, bool) {
+	switch extension {
+	case u8(Arithmetic_Opcode_Extension.ADD):
+		return .ADD, true
+	case u8(Arithmetic_Opcode_Extension.SUB):
+		return .SUB, true
+	case u8(Arithmetic_Opcode_Extension.CMP):
+		return .CMP, true
+	}
+	return .ADD, false
+}
+
+arithmetic_mnemonic :: proc(operation: Arithmetic_Operation) -> string {
+	switch operation {
+	case .ADD:
+		return "add"
+	case .SUB:
+		return "sub"
+	case .CMP:
+		return "cmp"
+	}
+	return ""
+}
+
+simulate_arithmetic :: proc(
+	registers: ^[8]u16,
+	flags: ^Simulation_Flags,
+	operation: Arithmetic_Operation,
+	destination: u8,
+	source_value: u16,
+) -> (
+	previous_value, result: u16,
+) {
+	previous_value = registers[destination]
+	switch operation {
+	case .ADD:
+		result = u16((u32(previous_value) + u32(source_value)) & 0xffff)
+		registers[destination] = result
+	case .SUB, .CMP:
+		result = u16((u32(previous_value) + 0x10000 - u32(source_value)) & 0xffff)
+		if operation == .SUB {
+			registers[destination] = result
+		}
+	}
+	flags^ = simulation_flags_from_result(result)
+	return
+}
+
 decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 	for i := 0; i + 1 < len(data); {
 		b0 := data[i] // opcode (6 bits) d w
@@ -410,6 +510,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 
 simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Simulation_Result {
 	registers: [8]u16
+	flags: Simulation_Flags
 
 	fmt.sbprintfln(output, "--- %s execution ---", input_path)
 
@@ -434,7 +535,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 				output,
 				"mov %s, %d ; %s:0x%x->0x%x",
 				registers_16[register_index],
-				i16(value),
+				value,
 				registers_16[register_index],
 				previous_value,
 				value,
@@ -481,11 +582,174 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			continue
 		}
 
+		if b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_ADD_SHIFT_2) ||
+		   b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_SUB_SHIFT_2) ||
+		   b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_CMP_SHIFT_2) {
+			if i >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+
+			b1 := data[i]
+			i += 1
+			w := b0 & 1
+			mod := b1 >> 6
+			if w != 1 || mod != 0b11 {
+				return {error = .Unsupported_Instruction, offset = instruction_offset}
+			}
+
+			operation := Arithmetic_Operation.ADD
+			switch b0 >> 2 {
+			case u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_SUB_SHIFT_2):
+				operation = .SUB
+			case u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_CMP_SHIFT_2):
+				operation = .CMP
+			}
+
+			d := (b0 >> 1) & 1
+			reg := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+			destination := rm
+			source := reg
+			if d == 1 {
+				destination = reg
+				source = rm
+			}
+
+			previous_flags := flags
+			previous_value, _ := simulate_arithmetic(
+				&registers,
+				&flags,
+				operation,
+				destination,
+				registers[source],
+			)
+
+			fmt.sbprintf(
+				output,
+				"%s %s, %s ;",
+				arithmetic_mnemonic(operation),
+				registers_16[destination],
+				registers_16[source],
+			)
+			if operation != .CMP {
+				fmt.sbprintf(
+					output,
+					" %s:0x%x->0x%x",
+					registers_16[destination],
+					previous_value,
+					registers[destination],
+				)
+			}
+			write_simulation_flag_change(output, previous_flags, flags)
+			strings.write_rune(output, '\n')
+			continue
+		}
+
+		if b0 >> 1 == u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_ADD_SHIFT_1) ||
+		   b0 >> 1 == u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_SUB_SHIFT_1) ||
+		   b0 >> 1 == u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_CMP_SHIFT_1) {
+			if b0 & 1 != 1 {
+				return {error = .Unsupported_Instruction, offset = instruction_offset}
+			}
+			if i + 1 >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+
+			operation := Arithmetic_Operation.ADD
+			switch b0 >> 1 {
+			case u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_SUB_SHIFT_1):
+				operation = .SUB
+			case u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_CMP_SHIFT_1):
+				operation = .CMP
+			}
+
+			immediate := u16(data[i]) | u16(data[i + 1]) << 8
+			i += 2
+			previous_flags := flags
+			previous_value, _ := simulate_arithmetic(&registers, &flags, operation, 0, immediate)
+
+			fmt.sbprintf(output, "%s ax, %d ;", arithmetic_mnemonic(operation), i16(immediate))
+			if operation != .CMP {
+				fmt.sbprintf(output, " ax:0x%x->0x%x", previous_value, registers[0])
+			}
+			write_simulation_flag_change(output, previous_flags, flags)
+			strings.write_rune(output, '\n')
+			continue
+		}
+
+		if b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_BYTE) ||
+		   b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_WORD) ||
+		   b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_SIGN_EXTENDED) {
+			if i >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+
+			b1 := data[i]
+			i += 1
+			mod := b1 >> 6
+			extension := (b1 >> 3) & 0b111
+			destination := b1 & 0b111
+			operation, supported := arithmetic_operation_from_extension(extension)
+			if !supported || b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_BYTE) || mod != 0b11 {
+				return {error = .Unsupported_Instruction, offset = instruction_offset}
+			}
+
+			immediate: u16
+			immediate_for_trace: i16
+			if b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_WORD) {
+				if i + 1 >= len(data) {
+					return {error = .Truncated_Instruction, offset = instruction_offset}
+				}
+				immediate = u16(data[i]) | u16(data[i + 1]) << 8
+				immediate_for_trace = i16(immediate)
+				i += 2
+			} else {
+				if i >= len(data) {
+					return {error = .Truncated_Instruction, offset = instruction_offset}
+				}
+				immediate_for_trace = i16(i8(data[i]))
+				immediate = u16(immediate_for_trace)
+				i += 1
+			}
+
+			previous_flags := flags
+			previous_value, _ := simulate_arithmetic(
+				&registers,
+				&flags,
+				operation,
+				destination,
+				immediate,
+			)
+
+			fmt.sbprintf(
+				output,
+				"%s %s, %d ;",
+				arithmetic_mnemonic(operation),
+				registers_16[destination],
+				immediate_for_trace,
+			)
+			if operation != .CMP {
+				fmt.sbprintf(
+					output,
+					" %s:0x%x->0x%x",
+					registers_16[destination],
+					previous_value,
+					registers[destination],
+				)
+			}
+			write_simulation_flag_change(output, previous_flags, flags)
+			strings.write_rune(output, '\n')
+			continue
+		}
+
 		return {error = .Unsupported_Instruction, offset = instruction_offset}
 	}
 
 	strings.write_string(output, "\nFinal registers:\n")
 	for register_index in final_register_order {
+		if registers[register_index] == 0 {
+			continue
+		}
 		fmt.sbprintfln(
 			output,
 			"      %s: 0x%04x (%d)",
@@ -493,6 +757,11 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			registers[register_index],
 			registers[register_index],
 		)
+	}
+	if flags.parity || flags.zero || flags.sign {
+		strings.write_string(output, "   flags: ")
+		write_simulation_flags(output, flags)
+		strings.write_rune(output, '\n')
 	}
 	strings.write_rune(output, '\n')
 

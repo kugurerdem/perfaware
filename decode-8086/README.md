@@ -15,7 +15,7 @@ There were three milestones to implementing the decoder, which are all currently
 ## Simulator
 
 - [X] Simulate the 16-bit, non-memory MOVs from listings 43 and 44
-- [ ] Simulating ADD, SUB, and CMP
+- [X] Simulating ADD, SUB, and CMP while also supporting the Z, S and P register flags.
 
 Run a listing in simulation mode with:
 

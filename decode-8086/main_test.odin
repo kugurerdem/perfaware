@@ -139,6 +139,42 @@ simulate_listing_0044_register_movs :: proc(t: ^testing.T) {
 }
 
 @(test)
+simulate_listing_0046_add_sub_cmp :: proc(t: ^testing.T) {
+	expect_simulation_trace(
+		t,
+		#load("testdata/listing_0046_add_sub_cmp"),
+		"test\\listing_0046_add_sub_cmp",
+		#load("testdata/listing_0046_add_sub_cmp.txt"),
+	)
+}
+
+@(test)
+simulate_add_sub_cmp_forms :: proc(t: ^testing.T) {
+	data := [14]u8 {
+		0xb8, 0x01, 0x00, // mov ax, 1
+		0xbb, 0x02, 0x00, // mov bx, 2
+		0x03, 0xc3,       // add ax, bx
+		0x83, 0xe8, 0xff, // sub ax, byte -1
+		0x3d, 0x04, 0x00, // cmp ax, 4
+	}
+	expect_simulation_trace(
+		t,
+		transmute(string)data[:],
+		"arithmetic-forms",
+		"--- arithmetic-forms execution ---\n" +
+		"mov ax, 1 ; ax:0x0->0x1\n" +
+		"mov bx, 2 ; bx:0x0->0x2\n" +
+		"add ax, bx ; ax:0x1->0x3 flags:->P\n" +
+		"sub ax, -1 ; ax:0x3->0x4 flags:P->\n" +
+		"cmp ax, 4 ; flags:->PZ\n" +
+		"\nFinal registers:\n" +
+		"      ax: 0x0004 (4)\n" +
+		"      bx: 0x0002 (2)\n" +
+		"   flags: PZ\n\n",
+	)
+}
+
+@(test)
 simulate_rejects_unsupported_instruction :: proc(t: ^testing.T) {
 	// mov ax, [0] uses a memory operand and is outside the first simulator milestone.
 	data := [3]u8{0xa1, 0x00, 0x00}
@@ -157,6 +193,17 @@ simulate_reports_truncated_instruction :: proc(t: ^testing.T) {
 	defer strings.builder_destroy(&output)
 
 	result := simulate(data[:], "truncated", &output)
+	testing.expect(t, result.error == .Truncated_Instruction)
+	testing.expect(t, result.offset == 0)
+}
+
+@(test)
+simulate_reports_truncated_arithmetic_immediate :: proc(t: ^testing.T) {
+	data := [3]u8{0x81, 0xc0, 0x01}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(data[:], "truncated-arithmetic", &output)
 	testing.expect(t, result.error == .Truncated_Instruction)
 	testing.expect(t, result.offset == 0)
 }

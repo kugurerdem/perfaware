@@ -4,13 +4,29 @@ import "core:fmt"
 import "core:os"
 import "core:strings"
 
-// Opcode is the first 6 bits of the instruction
-// it can be obtained by applying >> 2 to the first half of the instruction
+// Opcode contains the fixed opcode bits for each supported instruction form.
+// The suffix documents how many low-order bits must be removed from the first
+// instruction byte before comparing it with the enum value.
 Opcode :: enum u8 {
-	REGISTER_MEMORY_TO_FROM_REGISTER_MOV = 0b100010,
-	IMMEDIATE_TO_REG_MOV                 = 0b1011,
-	IMMEDIATE_TO_REGISTER_MEMORY_MOV     = 0b1100011,
-	ACCUMULATOR_MEMORY_MOV               = 0b101000,
+	REGISTER_MEMORY_TO_FROM_REGISTER_ADD_SHIFT_2 = 0b000000,
+	REGISTER_MEMORY_TO_FROM_REGISTER_SUB_SHIFT_2 = 0b001010,
+	REGISTER_MEMORY_TO_FROM_REGISTER_CMP_SHIFT_2 = 0b001110,
+	REGISTER_MEMORY_TO_FROM_REGISTER_MOV_SHIFT_2 = 0b100010,
+	IMMEDIATE_TO_ACCUMULATOR_ADD_SHIFT_1         = 0b00000010,
+	IMMEDIATE_TO_ACCUMULATOR_SUB_SHIFT_1         = 0b00010110,
+	IMMEDIATE_TO_ACCUMULATOR_CMP_SHIFT_1         = 0b00011110,
+	IMMEDIATE_TO_REGISTER_MEMORY_BYTE            = 0b10000000,
+	IMMEDIATE_TO_REGISTER_MEMORY_WORD            = 0b10000001,
+	IMMEDIATE_TO_REGISTER_MEMORY_SIGN_EXTENDED   = 0b10000011,
+	IMMEDIATE_TO_REG_MOV_SHIFT_4                 = 0b1011,
+	IMMEDIATE_TO_REGISTER_MEMORY_MOV_SHIFT_1     = 0b1100011,
+	ACCUMULATOR_MEMORY_MOV_SHIFT_2               = 0b101000,
+}
+
+Arithmetic_Opcode_Extension :: enum u8 {
+	ADD = 0,
+	SUB = 5,
+	CMP = 7,
 }
 
 // We use registers_8 when w == 0, and registers_16 when w == 1
@@ -137,12 +153,16 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 		i += 1
 
 		switch {
-		case b0 >> 2 == 0b000000 || b0 >> 2 == 0b001010 || b0 >> 2 == 0b001110:
+		// We can group these ADD, SUB and CMP operations simply because,
+		// their handling is same except for the opcode/mnemonic
+		case b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_ADD_SHIFT_2) ||
+		     b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_SUB_SHIFT_2) ||
+		     b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_CMP_SHIFT_2):
 			mnemonic := "add"
 			switch b0 >> 2 {
-			case 0b001010:
+			case u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_SUB_SHIFT_2):
 				mnemonic = "sub"
-			case 0b001110:
+			case u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_CMP_SHIFT_2):
 				mnemonic = "cmp"
 			}
 
@@ -168,12 +188,17 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 			}
 			strings.builder_destroy(&rm_builder)
 			continue
-		case b0 >> 1 == 0b00000010 || b0 >> 1 == 0b00010110 || b0 >> 1 == 0b00011110:
+
+		// We can group these ADD, SUB and CMP operations simply because,
+		// their handling is same except for the opcode/mnemonic
+		case b0 >> 1 == u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_ADD_SHIFT_1) ||
+		     b0 >> 1 == u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_SUB_SHIFT_1) ||
+		     b0 >> 1 == u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_CMP_SHIFT_1):
 			mnemonic := "add"
 			switch b0 >> 1 {
-			case 0b00010110:
+			case u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_SUB_SHIFT_1):
 				mnemonic = "sub"
-			case 0b00011110:
+			case u8(Opcode.IMMEDIATE_TO_ACCUMULATOR_CMP_SHIFT_1):
 				mnemonic = "cmp"
 			}
 
@@ -186,25 +211,28 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 				fmt.sbprintfln(output, "%s ax, %d", mnemonic, i16(immediate))
 			}
 			continue
-		case b0 == 0x80 || b0 == 0x81 || b0 == 0x83:
+
+		case b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_BYTE) ||
+		     b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_WORD) ||
+		     b0 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_SIGN_EXTENDED):
 			mod := b1 >> 6
 			opcode_extension := (b1 >> 3) & 0b111
 			rm := b1 & 0b111
 
 			mnemonic := ""
 			switch opcode_extension {
-			case 0:
+			case u8(Arithmetic_Opcode_Extension.ADD):
 				mnemonic = "add"
-			case 5:
+			case u8(Arithmetic_Opcode_Extension.SUB):
 				mnemonic = "sub"
-			case 7:
+			case u8(Arithmetic_Opcode_Extension.CMP):
 				mnemonic = "cmp"
 			case:
 				return {error = .Unsupported_Opcode, offset = i - 2}
 			}
 
 			w: u8 = 0
-			if b0 != 0x80 {
+			if b0 != u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_BYTE) {
 				w = 1
 			}
 
@@ -213,7 +241,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 			rm_operand := strings.to_string(rm_builder)
 
 			switch b0 {
-			case 0x80:
+			case u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_BYTE):
 				immediate := i8(data[i])
 				i += 1
 				if mod == 0b11 {
@@ -221,7 +249,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 				} else {
 					fmt.sbprintfln(output, "%s byte %s, %d", mnemonic, rm_operand, immediate)
 				}
-			case 0x81:
+			case u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_WORD):
 				raw_immediate := u16(data[i]) | u16(data[i + 1]) << 8
 				i += 2
 				immediate := i16(raw_immediate)
@@ -242,7 +270,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 						immediate,
 					)
 				}
-			case 0x83:
+			case u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_SIGN_EXTENDED):
 				immediate := i8(data[i])
 				i += 1
 				if mod == 0b11 {
@@ -272,7 +300,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 		case b0 & 0b11111100 == 0b11100000:
 			write_relative_jump(output, loop_mnemonics[b0 & 0b11], i8(b1))
 			continue
-		case b0 >> 2 == u8(Opcode.ACCUMULATOR_MEMORY_MOV):
+		case b0 >> 2 == u8(Opcode.ACCUMULATOR_MEMORY_MOV_SHIFT_2):
 			// A0-A3 encode a move between AL/AX and a direct 16-bit
 			// memory address. The instruction has no ModR/M byte, so b1
 			// is the low byte of the address that was read above.
@@ -292,7 +320,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 				fmt.sbprintfln(output, "mov [%d], %s", address, accumulator)
 			}
 			continue
-		case b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV):
+		case b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV_SHIFT_2):
 			// d determines the operand direction
 			// it 0, we copy from reg_operand to rm_operand
 			// if 1, we copy from rm_operand to reg_operand
@@ -324,7 +352,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 			strings.builder_destroy(&rm_builder)
 
 			continue
-		case b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV):
+		case b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV_SHIFT_4):
 			w := (b0 >> 3) & 1
 			reg := b0 & 0b111
 
@@ -337,7 +365,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 				fmt.sbprintfln(output, "mov %s, %d", registers_16[reg], i16(immediate))
 			}
 			continue
-		case b0 >> 1 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_MOV):
+		case b0 >> 1 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_MOV_SHIFT_1):
 			w := b0 & 1
 			mod := b1 >> 6
 			opcode_extension := (b1 >> 3) & 0b111
@@ -391,7 +419,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 		i += 1
 
 		// B8-BF encode a 16-bit immediate-to-register MOV.
-		if b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV) && (b0 >> 3) & 1 == 1 {
+		if b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV_SHIFT_4) && (b0 >> 3) & 1 == 1 {
 			if i + 1 >= len(data) {
 				return {error = .Truncated_Instruction, offset = instruction_offset}
 			}
@@ -416,7 +444,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 
 		// The first simulator milestone only supports 16-bit register-to-register
 		// MOVs. Memory operands and 8-bit register aliases are intentionally rejected.
-		if b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV) && b0 & 1 == 1 {
+		if b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV_SHIFT_2) && b0 & 1 == 1 {
 			if i >= len(data) {
 				return {error = .Truncated_Instruction, offset = instruction_offset}
 			}

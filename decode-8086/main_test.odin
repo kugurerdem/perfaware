@@ -62,6 +62,37 @@ expect_assembly_round_trip :: proc(t: ^testing.T, input: string) {
 	testing.expect(t, bytes.equal(assembled, transmute([]u8)input), "round-trip bytes differ")
 }
 
+expect_simulation_trace :: proc(t: ^testing.T, input, input_path, expected_trace: string) {
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(transmute([]u8)input, input_path, &output)
+	if !testing.expectf(
+		t,
+		result.error == .None,
+		"simulation failed at byte %d with %v",
+		result.offset,
+		result.error,
+	) {
+		return
+	}
+
+	expected_builder := strings.builder_make()
+	defer strings.builder_destroy(&expected_builder)
+	strings.write_string(&expected_builder, expected_trace)
+	strings.builder_replace_all(&expected_builder, "\r\n", "\n")
+	strings.builder_replace_all(&expected_builder, " \n", "\n")
+	expected := strings.to_string(expected_builder)
+
+	testing.expectf(
+		t,
+		strings.to_string(output) == expected,
+		"simulation trace differs\nexpected:\n%s\nactual:\n%s",
+		expected,
+		strings.to_string(output),
+	)
+}
+
 @(test)
 listing_0037_single_register_mov :: proc(t: ^testing.T) {
 	expect_assembly_round_trip(t, #load("testdata/listing_0037_single_register_mov"))
@@ -85,4 +116,47 @@ listing_0040_challenge_movs :: proc(t: ^testing.T) {
 @(test)
 listing_0041_add_sub_cmp_jnz :: proc(t: ^testing.T) {
 	expect_assembly_round_trip(t, #load("testdata/listing_0041_add_sub_cmp_jnz"))
+}
+
+@(test)
+simulate_listing_0043_immediate_movs :: proc(t: ^testing.T) {
+	expect_simulation_trace(
+		t,
+		#load("testdata/listing_0043_immediate_movs"),
+		"test\\listing_0043_immediate_movs",
+		#load("testdata/listing_0043_immediate_movs.txt"),
+	)
+}
+
+@(test)
+simulate_listing_0044_register_movs :: proc(t: ^testing.T) {
+	expect_simulation_trace(
+		t,
+		#load("testdata/listing_0044_register_movs"),
+		"test\\listing_0044_register_movs",
+		#load("testdata/listing_0044_register_movs.txt"),
+	)
+}
+
+@(test)
+simulate_rejects_unsupported_instruction :: proc(t: ^testing.T) {
+	// mov ax, [0] uses a memory operand and is outside the first simulator milestone.
+	data := [3]u8{0xa1, 0x00, 0x00}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(data[:], "memory-mov", &output)
+	testing.expect(t, result.error == .Unsupported_Instruction)
+	testing.expect(t, result.offset == 0)
+}
+
+@(test)
+simulate_reports_truncated_instruction :: proc(t: ^testing.T) {
+	data := [2]u8{0xb8, 0x01}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(data[:], "truncated", &output)
+	testing.expect(t, result.error == .Truncated_Instruction)
+	testing.expect(t, result.offset == 0)
 }

@@ -14,8 +14,17 @@ There were three milestones to implementing the decoder, which are all currently
 
 ## Simulator
 
-- [ ] Simulate non-memory MOVs
+- [X] Simulate the 16-bit, non-memory MOVs from listings 43 and 44
 - [ ] Simulating ADD, SUB, and CMP
+
+Run a listing in simulation mode with:
+
+```bash
+odin run . -- testdata/listing_0043_immediate_movs simulation.txt -sim
+```
+
+The simulation trace is written to the target file. It includes each instruction's
+register change and the final register values.
 
 ## Testing
 

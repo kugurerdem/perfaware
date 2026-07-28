@@ -18,6 +18,7 @@ Opcode :: enum u8 {
 // For example, if w == 0, then REG field is 000 it will map to registers_8[000] -> al
 registers_8 := [8]string{"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"}
 registers_16 := [8]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}
+final_register_order := [8]u8{0, 3, 1, 2, 4, 5, 6, 7}
 
 // Effective-address expressions selected by the r/m field when mod != 0b11.
 // They are used for main memory
@@ -114,6 +115,17 @@ Decode_Result :: struct {
 	error:           Decode_Error,
 	offset:          int,
 	addressing_mode: u8,
+}
+
+Simulation_Error :: enum {
+	None,
+	Unsupported_Instruction,
+	Truncated_Instruction,
+}
+
+Simulation_Result :: struct {
+	error:  Simulation_Error,
+	offset: int,
 }
 
 decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
@@ -368,16 +380,124 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 	return {}
 }
 
+simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Simulation_Result {
+	registers: [8]u16
+
+	fmt.sbprintfln(output, "--- %s execution ---", input_path)
+
+	for i := 0; i < len(data); {
+		instruction_offset := i
+		b0 := data[i]
+		i += 1
+
+		// B8-BF encode a 16-bit immediate-to-register MOV.
+		if b0 >> 4 == u8(Opcode.IMMEDIATE_TO_REG_MOV) && (b0 >> 3) & 1 == 1 {
+			if i + 1 >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+
+			register_index := b0 & 0b111
+			value := u16(data[i]) | u16(data[i + 1]) << 8
+			i += 2
+
+			previous_value := registers[register_index]
+			registers[register_index] = value
+			fmt.sbprintfln(
+				output,
+				"mov %s, %d ; %s:0x%x->0x%x",
+				registers_16[register_index],
+				i16(value),
+				registers_16[register_index],
+				previous_value,
+				value,
+			)
+			continue
+		}
+
+		// The first simulator milestone only supports 16-bit register-to-register
+		// MOVs. Memory operands and 8-bit register aliases are intentionally rejected.
+		if b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV) && b0 & 1 == 1 {
+			if i >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+
+			b1 := data[i]
+			i += 1
+			mod := b1 >> 6
+			if mod != 0b11 {
+				return {error = .Unsupported_Instruction, offset = instruction_offset}
+			}
+
+			d := (b0 >> 1) & 1
+			reg := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+
+			destination := rm
+			source := reg
+			if d == 1 {
+				destination = reg
+				source = rm
+			}
+
+			previous_value := registers[destination]
+			registers[destination] = registers[source]
+			fmt.sbprintfln(
+				output,
+				"mov %s, %s ; %s:0x%x->0x%x",
+				registers_16[destination],
+				registers_16[source],
+				registers_16[destination],
+				previous_value,
+				registers[destination],
+			)
+			continue
+		}
+
+		return {error = .Unsupported_Instruction, offset = instruction_offset}
+	}
+
+	strings.write_string(output, "\nFinal registers:\n")
+	for register_index in final_register_order {
+		fmt.sbprintfln(
+			output,
+			"      %s: 0x%04x (%d)",
+			registers_16[register_index],
+			registers[register_index],
+			registers[register_index],
+		)
+	}
+	strings.write_rune(output, '\n')
+
+	return {}
+}
+
+print_usage :: proc() {
+	fmt.println("Usage: decode_8086 inputfile targetfile [-sim]")
+}
+
 main :: proc() {
-	if len(os.args) < 3 {
-		fmt.println("Example Usage: decode_8086 inputfile targetfile")
+	simulate_mode := false
+	switch len(os.args) {
+	case 3:
+	case 4:
+		if os.args[3] != "-sim" {
+			print_usage()
+			return
+		}
+		simulate_mode = true
+	case:
+		print_usage()
 		return
 	}
 
 	binaryFilePath := os.args[1]
 	decodeFilePath := os.args[2]
 
-	fmt.printf("Decompiling %s into %s\n", binaryFilePath, decodeFilePath)
+	if simulate_mode {
+		fmt.printf("Simulating %s into %s\n", binaryFilePath, decodeFilePath)
+	} else {
+		fmt.printf("Decompiling %s into %s\n", binaryFilePath, decodeFilePath)
+	}
 
 	data, err := os.read_entire_file(binaryFilePath, context.allocator)
 	if err != nil {
@@ -389,19 +509,32 @@ main :: proc() {
 	output := strings.builder_make()
 	defer strings.builder_destroy(&output)
 
-	result := decode(data, &output)
-	switch result.error {
-	case .Unsupported_Opcode:
-		fmt.printf("Unsupported opcode at byte %d\n", result.offset)
-		return
-	case .Unsupported_Addressing_Mode:
-		fmt.printf(
-			"Unsupported addressing mode at byte %d: mod=%02b\n",
-			result.offset,
-			result.addressing_mode,
-		)
-		return
-	case .None:
+	if simulate_mode {
+		result := simulate(data, binaryFilePath, &output)
+		switch result.error {
+		case .Unsupported_Instruction:
+			fmt.printf("Unsupported simulation instruction at byte %d\n", result.offset)
+			return
+		case .Truncated_Instruction:
+			fmt.printf("Truncated simulation instruction at byte %d\n", result.offset)
+			return
+		case .None:
+		}
+	} else {
+		result := decode(data, &output)
+		switch result.error {
+		case .Unsupported_Opcode:
+			fmt.printf("Unsupported opcode at byte %d\n", result.offset)
+			return
+		case .Unsupported_Addressing_Mode:
+			fmt.printf(
+				"Unsupported addressing mode at byte %d: mod=%02b\n",
+				result.offset,
+				result.addressing_mode,
+			)
+			return
+		case .None:
+		}
 	}
 
 	err = os.write_entire_file(decodeFilePath, strings.to_string(output))

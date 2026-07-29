@@ -335,6 +335,74 @@ simulate_arithmetic :: proc(
 	return
 }
 
+simulation_effective_address :: proc(
+	data: []u8,
+	i: ^int,
+	mod, rm: u8,
+	registers: ^[8]u16,
+) -> (u16, bool) {
+	base: u16
+	switch rm {
+	case 0b000:
+		base = u16((u32(registers[3]) + u32(registers[6])) & 0xffff) // bx + si
+	case 0b001:
+		base = u16((u32(registers[3]) + u32(registers[7])) & 0xffff) // bx + di
+	case 0b010:
+		base = u16((u32(registers[5]) + u32(registers[6])) & 0xffff) // bp + si
+	case 0b011:
+		base = u16((u32(registers[5]) + u32(registers[7])) & 0xffff) // bp + di
+	case 0b100:
+		base = registers[6] // si
+	case 0b101:
+		base = registers[7] // di
+	case 0b110:
+		base = registers[5] // bp, except for mod=00's direct address
+	case 0b111:
+		base = registers[3] // bx
+	}
+
+	switch mod {
+	case 0b00:
+		if rm == 0b110 {
+			if i^ + 1 >= len(data) {
+				return 0, false
+			}
+			address := u16(data[i^]) | u16(data[i^ + 1]) << 8
+			i^ += 2
+			return address, true
+		}
+	case 0b01:
+		if i^ >= len(data) {
+			return 0, false
+		}
+		displacement := i16(i8(data[i^]))
+		i^ += 1
+		base = u16((u32(base) + u32(u16(displacement))) & 0xffff)
+	case 0b10:
+		if i^ + 1 >= len(data) {
+			return 0, false
+		}
+		displacement := u16(data[i^]) | u16(data[i^ + 1]) << 8
+		i^ += 2
+		base = u16((u32(base) + u32(displacement)) & 0xffff)
+	case:
+		return 0, false
+	}
+
+	return base, true
+}
+
+simulation_memory_read_word :: proc(memory: ^[65536]u8, address: u16) -> u16 {
+	next_address := u16((u32(address) + 1) & 0xffff)
+	return u16(memory[address]) | u16(memory[next_address]) << 8
+}
+
+simulation_memory_write_word :: proc(memory: ^[65536]u8, address, value: u16) {
+	next_address := u16((u32(address) + 1) & 0xffff)
+	memory[address] = u8(value & 0xff)
+	memory[next_address] = u8(value >> 8)
+}
+
 decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 	for i := 0; i + 1 < len(data); {
 		b0 := data[i] // opcode (6 bits) d w
@@ -601,6 +669,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 
 simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Simulation_Result {
 	registers: [8]u16
+	memory: [65536]u8
 	flags: Simulation_Flags
 
 	fmt.sbprintfln(output, "--- %s execution ---", input_path)
@@ -623,22 +692,21 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 
 			previous_value := registers[register_index]
 			registers[register_index] = value
-			fmt.sbprintfln(
-				output,
-				"mov %s, %d ; %s:0x%x->0x%x ip:0x%x->0x%x",
-				registers_16[register_index],
-				value,
-				registers_16[register_index],
-				previous_value,
-				value,
-				instruction_offset,
-				i,
-			)
+			fmt.sbprintf(output, "mov %s, %d ;", registers_16[register_index], value)
+			if previous_value != value {
+				fmt.sbprintf(
+					output,
+					" %s:0x%x->0x%x",
+					registers_16[register_index],
+					previous_value,
+					value,
+				)
+			}
+			write_simulation_ip_change(output, instruction_offset, i)
+			strings.write_rune(output, '\n')
 			continue
 		}
 
-		// The first simulator milestone only supports 16-bit register-to-register
-		// MOVs. Memory operands and 8-bit register aliases are intentionally rejected.
 		if b0 >> 2 == u8(Opcode.REGISTER_MEMORY_TO_FROM_REGISTER_MOV_SHIFT_2) && b0 & 1 == 1 {
 			if i >= len(data) {
 				return {error = .Truncated_Instruction, offset = instruction_offset}
@@ -647,34 +715,107 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			b1 := data[i]
 			i += 1
 			mod := b1 >> 6
-			if mod != 0b11 {
-				return {error = .Unsupported_Instruction, offset = instruction_offset}
-			}
-
 			d := (b0 >> 1) & 1
 			reg := (b1 >> 3) & 0b111
 			rm := b1 & 0b111
 
-			destination := rm
-			source := reg
-			if d == 1 {
-				destination = reg
-				source = rm
+			if mod == 0b11 {
+				destination := rm
+				source := reg
+				if d == 1 {
+					destination = reg
+					source = rm
+				}
+
+				previous_value := registers[destination]
+				registers[destination] = registers[source]
+				fmt.sbprintf(
+					output,
+					"mov %s, %s ;",
+					registers_16[destination],
+					registers_16[source],
+				)
+				if previous_value != registers[destination] {
+					fmt.sbprintf(
+						output,
+						" %s:0x%x->0x%x",
+						registers_16[destination],
+						previous_value,
+						registers[destination],
+					)
+				}
+			} else {
+				operand_offset := i
+				address, valid := simulation_effective_address(data, &i, mod, rm, &registers)
+				if !valid {
+					return {error = .Truncated_Instruction, offset = instruction_offset}
+				}
+
+				operand_builder := strings.builder_make()
+				operand_i := operand_offset
+				write_rm_operand(data, &operand_i, mod, rm, 1, &operand_builder)
+				operand := strings.to_string(operand_builder)
+
+				if d == 0 {
+					simulation_memory_write_word(&memory, address, registers[reg])
+					fmt.sbprintf(output, "mov %s, %s ;", operand, registers_16[reg])
+				} else {
+					previous_value := registers[reg]
+					registers[reg] = simulation_memory_read_word(&memory, address)
+					fmt.sbprintf(output, "mov %s, %s ;", registers_16[reg], operand)
+					if previous_value != registers[reg] {
+						fmt.sbprintf(
+							output,
+							" %s:0x%x->0x%x",
+							registers_16[reg],
+							previous_value,
+							registers[reg],
+						)
+					}
+				}
+				strings.builder_destroy(&operand_builder)
+			}
+			write_simulation_ip_change(output, instruction_offset, i)
+			strings.write_rune(output, '\n')
+			continue
+		}
+
+		// C7 /0 stores a 16-bit immediate in a register or memory operand.
+		if b0 >> 1 == u8(Opcode.IMMEDIATE_TO_REGISTER_MEMORY_MOV_SHIFT_1) && b0 & 1 == 1 {
+			if i >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
 			}
 
-			previous_value := registers[destination]
-			registers[destination] = registers[source]
-			fmt.sbprintfln(
+			b1 := data[i]
+			i += 1
+			mod := b1 >> 6
+			extension := (b1 >> 3) & 0b111
+			rm := b1 & 0b111
+			if extension != 0 || mod == 0b11 {
+				return {error = .Unsupported_Instruction, offset = instruction_offset}
+			}
+
+			operand_offset := i
+			address, valid := simulation_effective_address(data, &i, mod, rm, &registers)
+			if !valid || i + 1 >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+			value := u16(data[i]) | u16(data[i + 1]) << 8
+			i += 2
+			simulation_memory_write_word(&memory, address, value)
+
+			operand_builder := strings.builder_make()
+			operand_i := operand_offset
+			write_rm_operand(data, &operand_i, mod, rm, 1, &operand_builder)
+			fmt.sbprintf(
 				output,
-				"mov %s, %s ; %s:0x%x->0x%x ip:0x%x->0x%x",
-				registers_16[destination],
-				registers_16[source],
-				registers_16[destination],
-				previous_value,
-				registers[destination],
-				instruction_offset,
-				i,
+				"mov word %s, %d ;",
+				strings.to_string(operand_builder),
+				i16(value),
 			)
+			strings.builder_destroy(&operand_builder)
+			write_simulation_ip_change(output, instruction_offset, i)
+			strings.write_rune(output, '\n')
 			continue
 		}
 
@@ -968,4 +1109,3 @@ main :: proc() {
 		fmt.println("Failed to write file:", err)
 	}
 }
-

@@ -119,6 +119,16 @@ listing_0041_add_sub_cmp_jnz :: proc(t: ^testing.T) {
 }
 
 @(test)
+listing_0051_memory_mov :: proc(t: ^testing.T) {
+	expect_assembly_round_trip(t, #load("testdata/listing_0051_memory_mov"))
+}
+
+@(test)
+listing_0052_memory_add_loop :: proc(t: ^testing.T) {
+	expect_assembly_round_trip(t, #load("testdata/listing_0052_memory_add_loop"))
+}
+
+@(test)
 simulate_listing_0048_tracks_ip :: proc(t: ^testing.T) {
 	output := strings.builder_make()
 	defer strings.builder_destroy(&output)
@@ -190,6 +200,56 @@ simulate_listing_0049_conditional_jumps :: proc(t: ^testing.T) {
 }
 
 @(test)
+simulate_listing_0051_memory_mov :: proc(t: ^testing.T) {
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(
+		transmute([]u8)#load("testdata/listing_0051_memory_mov"),
+		"test\\listing_0051_memory_mov",
+		&output,
+	)
+	testing.expect(t, result.error == .None)
+	trace := strings.to_string(output)
+	testing.expect(t, strings.contains(trace, "      bx: 0x0001 (1)"))
+	testing.expect(t, strings.contains(trace, "      cx: 0x0002 (2)"))
+	testing.expect(t, strings.contains(trace, "      dx: 0x000a (10)"))
+	testing.expect(t, strings.contains(trace, "      bp: 0x0004 (4)"))
+	testing.expect(t, strings.contains(trace, "      ip: 0x0030 (48)"))
+}
+
+@(test)
+simulate_listing_0052_memory_add_loop :: proc(t: ^testing.T) {
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(
+		transmute([]u8)#load("testdata/listing_0052_memory_add_loop"),
+		"test\\listing_0052_memory_add_loop",
+		&output,
+	)
+	testing.expect(t, result.error == .None)
+	trace := strings.to_string(output)
+	testing.expect(t, strings.contains(trace, "      bx: 0x0006 (6)"))
+	testing.expect(t, strings.contains(trace, "      cx: 0x0004 (4)"))
+	testing.expect(t, strings.contains(trace, "      ip: 0x0023 (35)"))
+}
+
+@(test)
+simulate_memory_word_wraps_at_16_bit_address_boundary :: proc(t: ^testing.T) {
+	data := [10]u8 {
+		0xc7, 0x06, 0xff, 0xff, 0x34, 0x12, // mov word [65535], 0x1234
+		0x8b, 0x1e, 0xff, 0xff,             // mov bx, word [65535]
+	}
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(data[:], "wrapped-memory-word", &output)
+	testing.expect(t, result.error == .None)
+	testing.expect(t, strings.contains(strings.to_string(output), "      bx: 0x1234 (4660)"))
+}
+
+@(test)
 simulate_add_sub_cmp_forms :: proc(t: ^testing.T) {
 	data := [14]u8 {
 		0xb8, 0x01, 0x00, // mov ax, 1
@@ -218,8 +278,8 @@ simulate_add_sub_cmp_forms :: proc(t: ^testing.T) {
 
 @(test)
 simulate_rejects_unsupported_instruction :: proc(t: ^testing.T) {
-	// mov ax, [0] uses a memory operand and is outside the first simulator milestone.
-	data := [3]u8{0xa1, 0x00, 0x00}
+	// 8-bit register aliases remain outside the current simulator milestone.
+	data := [2]u8{0x88, 0xc0} // mov al, al
 	output := strings.builder_make()
 	defer strings.builder_destroy(&output)
 

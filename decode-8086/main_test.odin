@@ -119,33 +119,37 @@ listing_0041_add_sub_cmp_jnz :: proc(t: ^testing.T) {
 }
 
 @(test)
-simulate_listing_0043_immediate_movs :: proc(t: ^testing.T) {
-	expect_simulation_trace(
-		t,
-		#load("testdata/listing_0043_immediate_movs"),
-		"test\\listing_0043_immediate_movs",
-		#load("testdata/listing_0043_immediate_movs.txt"),
-	)
-}
+simulate_listing_0048_tracks_ip :: proc(t: ^testing.T) {
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
 
-@(test)
-simulate_listing_0044_register_movs :: proc(t: ^testing.T) {
-	expect_simulation_trace(
-		t,
-		#load("testdata/listing_0044_register_movs"),
-		"test\\listing_0044_register_movs",
-		#load("testdata/listing_0044_register_movs.txt"),
+	result := simulate(
+		transmute([]u8)#load("testdata/listing_0048_ip_register"),
+		"test\\listing_0048_ip_register",
+		&output,
 	)
-}
+	if !testing.expectf(
+		t,
+		result.error == .None,
+		"simulation failed at byte %d with %v",
+		result.offset,
+		result.error,
+	) {
+		return
+	}
 
-@(test)
-simulate_listing_0046_add_sub_cmp :: proc(t: ^testing.T) {
-	expect_simulation_trace(
-		t,
-		#load("testdata/listing_0046_add_sub_cmp"),
-		"test\\listing_0046_add_sub_cmp",
-		#load("testdata/listing_0046_add_sub_cmp.txt"),
-	)
+	trace := strings.to_string(output)
+	expected_ip_changes := [6]string {
+		"ip:0x0->0x3",
+		"ip:0x3->0x5",
+		"ip:0x5->0x9",
+		"ip:0x9->0xc",
+		"ip:0xc->0xe",
+		"      ip: 0x000e (14)",
+	}
+	for expected in expected_ip_changes {
+		testing.expectf(t, strings.contains(trace, expected), "missing trace entry %q", expected)
+	}
 }
 
 @(test)
@@ -162,14 +166,15 @@ simulate_add_sub_cmp_forms :: proc(t: ^testing.T) {
 		transmute(string)data[:],
 		"arithmetic-forms",
 		"--- arithmetic-forms execution ---\n" +
-		"mov ax, 1 ; ax:0x0->0x1\n" +
-		"mov bx, 2 ; bx:0x0->0x2\n" +
-		"add ax, bx ; ax:0x1->0x3 flags:->P\n" +
-		"sub ax, -1 ; ax:0x3->0x4 flags:P->\n" +
-		"cmp ax, 4 ; flags:->PZ\n" +
+		"mov ax, 1 ; ax:0x0->0x1 ip:0x0->0x3\n" +
+		"mov bx, 2 ; bx:0x0->0x2 ip:0x3->0x6\n" +
+		"add ax, bx ; ax:0x1->0x3 ip:0x6->0x8 flags:->P\n" +
+		"sub ax, -1 ; ax:0x3->0x4 ip:0x8->0xb flags:P->\n" +
+		"cmp ax, 4 ; ip:0xb->0xe flags:->PZ\n" +
 		"\nFinal registers:\n" +
 		"      ax: 0x0004 (4)\n" +
 		"      bx: 0x0002 (2)\n" +
+		"      ip: 0x000e (14)\n" +
 		"   flags: PZ\n\n",
 	)
 }

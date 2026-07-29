@@ -196,6 +196,10 @@ write_simulation_flag_change :: proc(
 	write_simulation_flags(output, current)
 }
 
+write_simulation_ip_change :: proc(output: ^strings.Builder, previous, current: int) {
+	fmt.sbprintf(output, " ip:0x%x->0x%x", previous, current)
+}
+
 arithmetic_operation_from_extension :: proc(extension: u8) -> (Arithmetic_Operation, bool) {
 	switch extension {
 	case u8(Arithmetic_Opcode_Extension.ADD):
@@ -514,7 +518,8 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 
 	fmt.sbprintfln(output, "--- %s execution ---", input_path)
 
-	for i := 0; i < len(data); {
+	i := 0
+	for i < len(data) {
 		instruction_offset := i
 		b0 := data[i]
 		i += 1
@@ -533,12 +538,14 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			registers[register_index] = value
 			fmt.sbprintfln(
 				output,
-				"mov %s, %d ; %s:0x%x->0x%x",
+				"mov %s, %d ; %s:0x%x->0x%x ip:0x%x->0x%x",
 				registers_16[register_index],
 				value,
 				registers_16[register_index],
 				previous_value,
 				value,
+				instruction_offset,
+				i,
 			)
 			continue
 		}
@@ -572,12 +579,14 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			registers[destination] = registers[source]
 			fmt.sbprintfln(
 				output,
-				"mov %s, %s ; %s:0x%x->0x%x",
+				"mov %s, %s ; %s:0x%x->0x%x ip:0x%x->0x%x",
 				registers_16[destination],
 				registers_16[source],
 				registers_16[destination],
 				previous_value,
 				registers[destination],
+				instruction_offset,
+				i,
 			)
 			continue
 		}
@@ -640,6 +649,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 					registers[destination],
 				)
 			}
+			write_simulation_ip_change(output, instruction_offset, i)
 			write_simulation_flag_change(output, previous_flags, flags)
 			strings.write_rune(output, '\n')
 			continue
@@ -672,6 +682,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			if operation != .CMP {
 				fmt.sbprintf(output, " ax:0x%x->0x%x", previous_value, registers[0])
 			}
+			write_simulation_ip_change(output, instruction_offset, i)
 			write_simulation_flag_change(output, previous_flags, flags)
 			strings.write_rune(output, '\n')
 			continue
@@ -737,6 +748,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 					registers[destination],
 				)
 			}
+			write_simulation_ip_change(output, instruction_offset, i)
 			write_simulation_flag_change(output, previous_flags, flags)
 			strings.write_rune(output, '\n')
 			continue
@@ -758,6 +770,7 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			registers[register_index],
 		)
 	}
+	fmt.sbprintfln(output, "      ip: 0x%04x (%d)", i, i)
 	if flags.parity || flags.zero || flags.sign {
 		strings.write_string(output, "   flags: ")
 		write_simulation_flags(output, flags)
@@ -839,4 +852,3 @@ main :: proc() {
 		fmt.println("Failed to write file:", err)
 	}
 }
-

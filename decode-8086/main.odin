@@ -21,6 +21,7 @@ Opcode :: enum u8 {
 	IMMEDIATE_TO_REG_MOV_SHIFT_4                 = 0b1011,
 	IMMEDIATE_TO_REGISTER_MEMORY_MOV_SHIFT_1     = 0b1100011,
 	ACCUMULATOR_MEMORY_MOV_SHIFT_2               = 0b101000,
+	CONDITIONAL_JUMP_SHIFT_4                     = 0b0111,
 }
 
 Arithmetic_Opcode_Extension :: enum u8 {
@@ -145,15 +146,36 @@ Simulation_Result :: struct {
 }
 
 Simulation_Flags :: struct {
-	parity: bool,
-	zero:   bool,
-	sign:   bool,
+	carry:    bool,
+	parity:   bool,
+	zero:     bool,
+	sign:     bool,
+	overflow: bool,
 }
 
 Arithmetic_Operation :: enum {
 	ADD,
 	SUB,
 	CMP,
+}
+
+Simulation_Condition :: enum u8 {
+	Overflow, // 0000 -> JO
+	Not_Overflow, // 0001 -> JNO
+	Below, // 0010 -> JB
+	Not_Below, // 0011 -> JNB
+	Equal, // 0100 -> JE
+	Not_Equal, // 0101 -> JNE
+	Below_Or_Equal, // 0110 -> JBE
+	Above, // 0111 -> JA
+	Sign, // 1000 -> JS
+	Not_Sign, // 1001 -> JNS
+	Parity, // 1010 -> JP
+	Not_Parity, // 1011 -> JNP
+	Less, // 1100 -> JL
+	Not_Less, // 1101 -> JNL
+	Less_Or_Equal, // 1110 -> JLE
+	Greater, // 1111 -> JG
 }
 
 simulation_flags_from_result :: proc(result: u16) -> Simulation_Flags {
@@ -224,6 +246,63 @@ arithmetic_mnemonic :: proc(operation: Arithmetic_Operation) -> string {
 	return ""
 }
 
+simulation_jump_is_taken :: proc(
+	condition: Simulation_Condition,
+	flags: Simulation_Flags,
+) -> bool {
+	switch condition {
+	case .Overflow:
+		// JO
+		return flags.overflow
+	case .Not_Overflow:
+		// JNO
+		return !flags.overflow
+	case .Below:
+		// JB/JC
+		return flags.carry
+	case .Not_Below:
+		// JNB/JNC
+		return !flags.carry
+	case .Equal:
+		// JE/JZ
+		return flags.zero
+	case .Not_Equal:
+		// JNE/JNZ
+		return !flags.zero
+	case .Below_Or_Equal:
+		// JBE
+		return flags.carry || flags.zero
+	case .Above:
+		// JA
+		return !flags.carry && !flags.zero
+	case .Sign:
+		// JS
+		return flags.sign
+	case .Not_Sign:
+		// JNS
+		return !flags.sign
+	case .Parity:
+		// JP
+		return flags.parity
+	case .Not_Parity:
+		// JNP
+		return !flags.parity
+	case .Less:
+		// JL
+		return flags.sign != flags.overflow
+	case .Not_Less:
+		// JNL
+		return flags.sign == flags.overflow
+	case .Less_Or_Equal:
+		// JLE
+		return flags.zero || flags.sign != flags.overflow
+	case .Greater:
+		// JG
+		return !flags.zero && flags.sign == flags.overflow
+	}
+	return false
+}
+
 simulate_arithmetic :: proc(
 	registers: ^[8]u16,
 	flags: ^Simulation_Flags,
@@ -245,6 +324,14 @@ simulate_arithmetic :: proc(
 		}
 	}
 	flags^ = simulation_flags_from_result(result)
+	switch operation {
+	case .ADD:
+		flags.carry = u32(previous_value) + u32(source_value) > 0xffff
+		flags.overflow = (previous_value ~ result) & (source_value ~ result) & 0x8000 != 0
+	case .SUB, .CMP:
+		flags.carry = previous_value < source_value
+		flags.overflow = (previous_value ~ source_value) & (previous_value ~ result) & 0x8000 != 0
+	}
 	return
 }
 
@@ -398,7 +485,7 @@ decode :: proc(data: []u8, output: ^strings.Builder) -> Decode_Result {
 
 			strings.builder_destroy(&rm_builder)
 			continue
-		case b0 >> 4 == 0b0111:
+		case b0 >> 4 == u8(Opcode.CONDITIONAL_JUMP_SHIFT_4):
 			write_relative_jump(output, jump_mnemonics[b0 & 0b1111], i8(b1))
 			continue
 		case b0 & 0b11111100 == 0b11100000:
@@ -754,6 +841,35 @@ simulate :: proc(data: []u8, input_path: string, output: ^strings.Builder) -> Si
 			continue
 		}
 
+		if b0 >> 4 == u8(Opcode.CONDITIONAL_JUMP_SHIFT_4) {
+			if i >= len(data) {
+				return {error = .Truncated_Instruction, offset = instruction_offset}
+			}
+
+			displacement := i8(data[i])
+			i += 1
+			condition := Simulation_Condition(b0 & 0b1111)
+			if simulation_jump_is_taken(condition, flags) {
+				i += int(displacement)
+			}
+			if i < 0 || i > len(data) {
+				return {error = .Unsupported_Instruction, offset = instruction_offset}
+			}
+
+			target_offset := int(displacement) + 2
+			fmt.sbprintf(output, "%s $", jump_mnemonics[b0 & 0b1111])
+			if target_offset < 0 {
+				fmt.sbprintf(output, "-%d", -target_offset)
+			} else if target_offset > 0 {
+				fmt.sbprintf(output, "+%d", target_offset)
+			}
+			strings.write_string(output, " ;")
+			write_simulation_ip_change(output, instruction_offset, i)
+			strings.write_rune(output, '\n')
+
+			continue
+		}
+
 		return {error = .Unsupported_Instruction, offset = instruction_offset}
 	}
 
@@ -852,3 +968,4 @@ main :: proc() {
 		fmt.println("Failed to write file:", err)
 	}
 }
+

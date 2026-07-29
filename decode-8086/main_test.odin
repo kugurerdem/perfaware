@@ -153,6 +153,43 @@ simulate_listing_0048_tracks_ip :: proc(t: ^testing.T) {
 }
 
 @(test)
+simulate_listing_0049_conditional_jumps :: proc(t: ^testing.T) {
+	output := strings.builder_make()
+	defer strings.builder_destroy(&output)
+
+	result := simulate(
+		transmute([]u8)#load("testdata/listing_0049_conditional_jumps"),
+		"test\\listing_0049_conditional_jumps",
+		&output,
+	)
+	if !testing.expectf(
+		t,
+		result.error == .None,
+		"simulation failed at byte %d with %v",
+		result.offset,
+		result.error,
+	) {
+		return
+	}
+
+	trace := strings.to_string(output)
+	testing.expectf(
+		t,
+		strings.count(trace, "jne $-6 ; ip:0xc->0x6") == 2,
+		"expected JNE to jump back twice:\n%s",
+		trace,
+	)
+	testing.expectf(
+		t,
+		strings.count(trace, "jne $-6 ; ip:0xc->0xe") == 1,
+		"expected the final JNE to fall through:\n%s",
+		trace,
+	)
+	testing.expect(t, strings.contains(trace, "      bx: 0x0406 (1030)"))
+	testing.expect(t, strings.contains(trace, "      ip: 0x000e (14)"))
+}
+
+@(test)
 simulate_add_sub_cmp_forms :: proc(t: ^testing.T) {
 	data := [14]u8 {
 		0xb8, 0x01, 0x00, // mov ax, 1
